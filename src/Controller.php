@@ -1,172 +1,252 @@
 <?php
 
-declare(strict_types=1);
+namespace PUMUSHKA\ticTacToe\Controller;
 
-namespace PUMUSHKA\TicTacToe\Controller;
+    use PUMUSHKA\ticTacToe\Model\Board as Board;
+    use Exception as Exception;
+    use LogicException as LogicException;
 
-use PUMUSHKA\TicTacToe\View\View;
+    use function cli\prompt;
+    use function cli\line;
+    use function cli\out;
 
-use function cli\line;
+    use function PUMUSHKA\ticTacToe\View\showGameBoard;
+    use function PUMUSHKA\ticTacToe\View\showMessage;
+    use function PUMUSHKA\ticTacToe\View\getValue;
 
-class Controller
+    use const PUMUSHKA\ticTacToe\Model\PLAYER_X_MARKUP;
+    use const PUMUSHKA\ticTacToe\Model\PLAYER_O_MARKUP;
+
+function startGame()
 {
-    private function validationData(string $playerData): array|bool
-    {
-        $inputArray = explode(' ', $playerData);
+    while (true) {
+        $command = prompt("Enter key");
+        $gameBoard = new Board();
+        if ($command == "--new") {
+            play($gameBoard);
+        } elseif ($command == "--list") {
+            listGames($gameBoard);
+        } elseif (preg_match('/(^--replay [0-9]+$)/', $command) != 0) {
+            $id = explode(' ', $command)[1];
+            replayGame($gameBoard, $id);
+        } elseif ($command == "--exit") {
+            exit("Thanks for using\n");
+        } else {
+            line("Key not found");
+        }
+    }
+}
 
-        if (count($inputArray) !== 2) {
-            echo "Неправильный формат ввода. Пожалуйста, введите координаты в формате '1 1'.\n";
-            return false;
+function play($gameBoard) {
+    $canContinue = true;
+    do {
+        initialize($gameBoard);
+        gameLoop($gameBoard);
+        inviteToContinue($canContinue);
+    } while ($canContinue);
+}
+
+function initialize($board)
+{
+    try {
+        $board->setUserName(getValue("Enter user name"));
+        $board->setDimension(getValue("Enter game board size"));
+        $board->initialize();
+    } catch (Exception $e) {
+        showMessage($e->getMessage());
+        initialize($board);
+    }
+}
+
+function gameLoop($board)
+{
+    $stopGame = false;
+    $currentMarkup = PLAYER_X_MARKUP;
+    $endGameMsg = "";
+    $db = $board->OpenDatabase();
+
+    date_default_timezone_set("Europe/Moscow");
+    $gameData = date("d") . "." . date("m") . "." . date("Y");
+    $gameTime = date("H") . ":" . date("i") . ":" . date("s");
+    $playerName =  $board->getUser();
+    $size = $board->getDimension();
+
+    $db->exec("INSERT INTO gamesInfo (
+        gameData, 
+        gameTime, 
+        playerName, 
+        sizeBoard, 
+        result
+        ) VALUES (
+        '$gameData', 
+        '$gameTime', 
+        '$playerName', 
+        '$size', 
+        'НЕ ЗАКОНЧЕНО')");
+
+    $id = $db->querySingle("SELECT idGame FROM gamesInfo ORDER BY idGame DESC LIMIT 1");
+
+    $board->setId($id);
+    $gameId = $board->getGameId();
+
+    do {
+        showGameBoard($board);
+        if ($currentMarkup == $board->getUserMarkup()) {
+            $db = processUserTurn($board, $currentMarkup, $stopGame, $db);
+            $endGameMsg = "Player '$currentMarkup' wins the game.";
+            $currentMarkup = $board->getComputerMarkup();
+        } else {
+            $db = processComputerTurn($board, $currentMarkup, $stopGame, $db);
+            $endGameMsg = "Player '$currentMarkup' wins the game.";
+            $currentMarkup = $board->getUserMarkup();
         }
 
-        // Проверка на то, что введены числа
-        if (!is_numeric($inputArray[0]) || !is_numeric($inputArray[1])) {
-            echo "Координаты должны быть числами. Пожалуйста, введите числовые координаты.\n";
-            return false;
+        if (!$board->isFreeSpaceEnough() && !$stopGame) {
+            showGameBoard($board);
+            $endGameMsg = "Draw!";
+            $stopGame = true;
         }
+    } while (!$stopGame);
 
-        // Проверка на диапазон значений
-        if ($inputArray[0] < 1 || $inputArray[0] > 3 || $inputArray[1] < 1 || $inputArray[1] > 3) {
-            echo "Координаты должны быть в диапазоне от 1 до 3. Пожалуйста, введите допустимые координаты.\n";
-            return false;
-        }
-
-        return $inputArray;
+    $temp_mark = $board->getUserMarkup();
+    if ($endGameMsg == "Player '$temp_mark' wins the game."){
+        $result = 'ПОБЕДА';
+        $board->endGame($gameId, $result, $db);
+    }
+    else{
+        $result = 'ПОРАЖЕНИЕ';
+        $board->endGame($gameId, $result, $db);
     }
 
-    private function isСrosses(): bool
-    {
-        $isCrosses = rand(0, 1);
+    showGameBoard($board);
+    showMessage($endGameMsg);
+}
 
-        return $isCrosses === 1 ? true : false;
-    }
-
-    private function isEmpty(string $cell): bool
-    {
-        return $cell === ' ' ? true : false;
-    }
-
-    private function isWinner(array $board, string $symbol): bool
-    {
-        for ($i = 0; $i < 3; $i++) {
-            if ($board[$i][0] === $symbol && $board[$i][1] === $symbol && $board[$i][2] === $symbol) {
-                return true;
-            }
-            if ($board[0][$i] === $symbol && $board[1][$i] === $symbol && $board[2][$i] === $symbol) {
-                return true;
-            }
-        }
-        if ($board[0][0] === $symbol && $board[1][1] === $symbol && $board[2][2] === $symbol) {
-            return true;
-        }
-        if ($board[0][2] === $symbol && $board[1][1] === $symbol && $board[2][0] === $symbol) {
-            return true;
-        }
-        return false;
-    }
-
-    public function generateComputerMove($board): array
-    {
-        $n = count($board);
-
-        do {
-            $x = rand(0, $n - 1);
-            $y = rand(0, $n - 1);
-        } while (!$this->isEmpty($board[$x][$y]));
-
-        $ceil = [$x, $y];
-
-        return $ceil;
-    }
-
-    public function startGame(): void
-    {
-        $board = [[' ', ' ', ' '], [' ', ' ', ' '], [' ', ' ', ' ']];
-        $ceil = [];
-
-        $computerMove = '';
-        $playerMove = '';
-
-        $moves = 0;
+function processUserTurn($board, $markup, &$stopGame, $db)
+{
+    $answerTaked = false;
+    do {
         try {
-            if ($this->isСrosses()) {
-                $computerMove = 'X';
-                $playerMove = 'O';
-
-                View::showProgress(true);
-
-                $computerCeil = $this->generateComputerMove($board);
-                $board[$computerCeil[0]][$computerCeil[1]] = $computerMove;
-
-                echo "Ход компьютера:\n";
-                View::showBoard($board);
-
-                $moves++;
-            } else {
-                $computerMove = 'O';
-                $playerMove = 'X';
-
-                View::showProgress(false);
-
-                $playerData = readline("Введите координаты ячейки (в формате x y, например 1 1): ");
-
-                if (!$this->validationData($playerData)) {
-                    View::showErrorMessage();
-                    die();
-                }
-
-                $ceil = explode(' ', $playerData);
-
-                $board[$ceil[0] - 1][$ceil[1] - 1] = $playerMove;
-
-                View::showBoard($board);
-
-                $computerCeil = $this->generateComputerMove($board);
-                $board[$computerCeil[0]][$computerCeil[1]] = $computerMove;
-
-                echo "Ход компьютера:\n";
-                View::showBoard($board);
-
-                $moves += 2;
+            $coords = getCoords($board);
+            $board->setMarkupOnBoard($coords[0], $coords[1], $markup);
+            $idGame = $board->getGameId();
+            $mark = $board->getMarkup();
+            $col = $coords[0] + 1;
+            $row = $coords[1] + 1;
+            $db->exec("INSERT INTO stepsInfo (
+                idGame, 
+                playerMark, 
+                rowCoord, 
+                colCoord
+                ) VALUES (
+                '$idGame', 
+                '$mark', 
+                '$col', 
+                '$row')");
+            if ($board->determineWinner($coords[0], $coords[1]) !== "") {
+                $stopGame = true;
             }
 
-            while (true) {
-                $playerData = readline("Введите координаты ячейки (в формате x y, например 1 1): ");
-
-                if (!$this->validationData($playerData)) {
-                    View::showErrorMessage();
-                    die();
-                }
-
-                $ceil = explode(' ', $playerData);
-
-                if ($this->isEmpty($board[$ceil[0] - 1][$ceil[1] - 1])) {
-                    $board[$ceil[0] - 1][$ceil[1] - 1] = $playerMove;
-
-                    $computerCeil = $this->generateComputerMove($board);
-                    $board[$computerCeil[0]][$computerCeil[1]] = $computerMove;
-
-                    View::showBoard($board);
-                    $moves += 2;
-                } else {
-                    View::showHint($board);
-                    continue;
-                }
-
-                if ($this->isWinner($board, $playerMove)) {
-                    View::showWin();
-                    break;
-                } elseif ($this->isWinner($board, $computerMove)) {
-                    View::showLose();
-                    break;
-                } elseif ($moves === count($board) * count($board) - 1) {
-                    View::showDraw();
-                    break;
-                }
-            }
-        } catch (\Exception $e) {
-            View::showErrorMessage();
-            die();
+            $answerTaked = true;
+        } catch (Exception $e) {
+            showMessage($e->getMessage());
         }
+    } while (!$answerTaked);
+    return $db;
+}
+
+function getCoords($board)
+{
+    $markup = $board->getUserMarkup();
+    $name = $board->getUser();
+    $coords = getValue("Enter coords for player '$markup' (player: '$name' ) (enter through : )");
+    if ($coords == "--exit"){
+        exit("Thanks for using");
+    }
+    $coords = explode(":", $coords);
+    $coords[0] = $coords[0]-1;
+    if (isset($coords[1])) {
+        $coords[1] = $coords[1]-1;
+    } else {    
+        throw new Exception("No second coordinate. Please try again.");
+    }
+    return $coords;
+}
+
+function processComputerTurn($board, $markup, &$stopGame, $db)
+{
+    $idGame = $board->getGameId();
+    $mark = 'O';
+    $answerTaked = false;
+    do {
+        $i = rand(0, $board->getDimension() - 1);
+        $j = rand(0, $board->getDimension() - 1);
+        $row = $i + 1;
+        $col = $j + 1;
+        try {
+            $board->setMarkupOnBoard($i, $j, $markup);
+            if ($board->determineWinner($i, $j) !== "") {
+                $stopGame = true;
+            }
+            $db->exec("INSERT INTO stepsInfo (
+                idGame, 
+                playerMark, 
+                rowCoord, 
+                colCoord
+                ) VALUES (
+                '$idGame', 
+                '$mark', 
+                '$row', 
+                '$col')");
+
+            $answerTaked = true;
+        } catch (Exception $e) {
+        }
+    } while (!$answerTaked);
+    return $db;
+}
+
+function inviteToContinue(&$canContinue)
+{
+    $answer = "";
+    do {
+        $answer = getValue("Do you want to continue? (y/n)");
+        if ($answer === "y") {
+            $canContinue = true;
+        } elseif ($answer === "n") {
+            $canContinue = false;
+        }
+    } while ($answer !== "y" && $answer !== "n");
+}
+
+function listGames($board)
+{
+    $db = $board->openDatabase();
+    $query = $db->query('SELECT * FROM gamesInfo');
+    while ($row = $query->fetchArray()) {
+        line("ID $row[0])\n    Date:$row[1] Time: $row[2]\n    Player Name:$row[3]\n    Size :$row[4]\n    Result:$row[5]");
+    }
+}
+
+function replayGame($board, $id)
+{
+    $db = $board->openDatabase();
+    $idGame = $db->querySingle("SELECT EXISTS(SELECT 1 FROM gamesInfo WHERE idGame='$id')");
+
+    if ($idGame == 1) {
+        $status = $db->querySingle("SELECT result from gamesInfo where idGame = '$id'");
+        $query = $db->query("SELECT rowCoord, colCoord, playerMark from stepsInfo where idGame = '$id'");
+        $dim = $db->querySingle("SELECT sizeBoard from gamesInfo where idGame = '$id'");
+        $turn = 1;
+        line("Game status: " . $status);
+        $board->setDimension($dim);
+        $board->initialize();
+        showGameBoard($board);
+        while ($row = $query->fetchArray()) {
+            $board->setMarkupOnBoard($row[0] - 1, $row[1] - 1, $row[2]);
+            showGameBoard($board);
+        }
+    } else {
+        line("Game not found!");
     }
 }
