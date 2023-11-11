@@ -6,6 +6,6 @@
         require_once($autoLoadGit);
     } else {require_once($autoLoadPackgaist);}
 
-    use function PUMUSHKA\ticTacToe\Controller\startGame;
+    use function PUMUSHKA\tic_tac_toe\Controller\showGame;
     startGame();
 ?>
